@@ -5,6 +5,11 @@ import configparser
 import os
 import re
 import math
+
+import bin.util.fileutils as fileutils
+# import bin.util.log as log
+import logging
+
 import sys
 import copy
 from PIL import Image, ImageDraw, ImageFont, ImageColor
@@ -17,6 +22,8 @@ from collections import defaultdict, Counter
 from random import randint, choice
 from timeit import default_timer
 from tqdm import tqdm
+
+logging.basicConfig(level=logging.INFO)
 
 # %% carpalx
 class Carpalx:
@@ -34,15 +41,15 @@ class Carpalx:
         self.config = Carpalx.load_configuration(self.configfile)
         # options.configfile = config.get('main', 'configfile')
 
-        self.keyboard_input = Carpalx.parse_conf_file(self.config.get('kb_definition', 'keyboard_input'))
-        # self.effort_model = Carpalx.parse_conf_file(self.config.get('model', 'effort_model'))
-        # self.effort_k_param = Carpalx.parse_conf_file(effort_model.get('main', 'k_param'))
-        # self.effort_weight_param = Carpalx.parse_conf_file(effort_model.get('main', 'weight_param'))
-        # self.effort_path_cost = Carpalx.parse_conf_file(effort_model.get('main', 'path_cost'))
-        # self.effort_finger_distance = Carpalx.parse_conf_file(effort_model.get('main', 'finger_distance'))
+        self.keyboard_input = fileutils.parse_conf_file(self.config.get('kb_definition', 'keyboard_input'))
+        # self.effort_model = fileutils.parse_conf_file(self.config.get('model', 'effort_model'))
+        # self.effort_k_param = fileutils.parse_conf_file(effort_model.get('main', 'k_param'))
+        # self.effort_weight_param = fileutils.parse_conf_file(effort_model.get('main', 'weight_param'))
+        # self.effort_path_cost = fileutils.parse_conf_file(effort_model.get('main', 'path_cost'))
+        # self.effort_finger_distance = fileutils.parse_conf_file(effort_model.get('main', 'finger_distance'))
 
-        self.colors = Carpalx.parse_conf_file(self.config.get('kb_parameters', 'colors'))
-        self.kb_modes = Carpalx.parse_conf_file(self.config.get('kb_parameters', 'modes'))
+        self.colors = fileutils.parse_conf_file(self.config.get('kb_parameters', 'colors'))
+        self.kb_modes = fileutils.parse_conf_file(self.config.get('kb_parameters', 'modes'))
         
         self.populate_configuration()
         self.__class__.configdir = self.config['main']['configdir']
@@ -58,7 +65,7 @@ class Carpalx:
         self.actions = self.config.get('main', 'action').split(',')
 
         for action in self.actions:
-            self.print_debug(1, f'found action {action}')
+            # logging.info(f'found action {action}')
             match action:
                 case 'loadtriads':
                     # read the document and extract triads
@@ -67,44 +74,44 @@ class Carpalx:
                     # document based on the setting of the mode=MODE value
                     # (see <mode MODE> block for filters for the MODE).
                     #
-                    self.print_debug(1, 'loading triad from corpus file', self.config.get('corpus', 'corpus'))
+                    logging.info(f'loading triad from corpus file {self.config.get('corpus', 'corpus')}')
                     keytriads = self.read_document(self.config.get('corpus', 'corpus'))
                 case 'loadkeyboard':
                     # create a keyboard and the associated effort matrix
-                    self.print_debug(1, 'loading keyboard from', self.config.get('kb_definition', 'keyboard_input'))
+                    logging.info(f'loading keyboard from {self.config.get('kb_definition', 'keyboard_input')}')
                     keyboard = Keyboard(self.config.get('kb_definition', 'keyboard_input'), self.config.get('model', 'effort_model'))
                 case 'reporttriads':
-                    self.print_debug(1, 'reporting triad frequency')
+                    logging.info('reporting triad frequency')
                     self.report_triads(keytriads, keyboard.keyboard)
                 case 'reportwordeffort':
-                    self.print_debug(1, 'reporting word efforts')
+                    logging.info('reporting word efforts')
                     self.report_word_effort(keyboard.keyboard)
                 case 'drawinputkeyboard':
-                    self.print_debug(1, 'drawing input keyboard')
+                    logging.info('drawing input keyboard')
                     self.draw_keyboard(keyboard.keyboard, self.config.get('kb_parameters', 'pngfile_keyboard_input'), {'title': f'{self.config.get("kb_definition", "keyboard_input")} layout'})
                     keyboard.print_keyboard()
                 case 'drawoutputkeyboard':
-                    self.print_debug(1, 'drawing output keyboard')
+                    logging.info('drawing output keyboard')
                     self.draw_keyboard(keyboard.keyboard, self.config.get('kb_parameters', 'pngfile_keyboard_output'), {'title': f'Optimized layout, runid {self.config.get("main", "runid")}'})
                     keyboard.print_keyboard()
                 case s if s.startswith('reporteffort'):
                     # calculate the canonical effort associated with the original
                     # keyboard layout - the layout will be altered to try to minimize this
                     report_option = s.removeprefix('reporteffort')
-                    self.print_debug(1, 'calculating effort')
+                    logging.info('calculating effort')
                     charlist = self.read_document(self.config.get('corpus', 'corpus'), get_charlist=True)
                     # self.config['options']['memorize'] = 'no'
                     keyboard.report_keyboard_effort(keytriads, report_option, charlist, memorize=False)
                     # self.config['options']['memorize'] = 'yes'
                 case 'optimize':
                     # optimize the keyboard layout to decrease the effort
-                    mask_config = Carpalx.parse_conf_file(self.config.get('kb_parameters', 'mask'))
+                    logging.info('optimizing keyboard')
                     timer_start = default_timer()
-                    keyboard = keyboard.optimize_keyboard(keytriads, self.config['annealing'], mask_config)
+                    keyboard = self.optimize_keyboard(keyboard, keytriads)
                     timer_stop = default_timer()
                     keyboard.print_keyboard()
-                    print('Total time spent optimizing:', '{:.3f}'.format(timer_stop-timer_start))
-                case 'exit':
+                    logging.info('Total time spent optimizing: {:.3f}'.format(timer_stop-timer_start))
+                case ['exit', 'quit']:
                     break
                 case other:
                     raise KeyError(f'cannot understand action {action}')
@@ -131,32 +138,11 @@ class Carpalx:
         if not found:
             raise FileNotFoundError(f'cannot find or read configuration file {file}')
 
-        config = Carpalx.parse_conf_file(filepath)
+        config = fileutils.parse_conf_file(filepath)
         config['main']['configfile'] = filename
         config['main']['configdir'] = os.path.abspath(dir)
 
         return config
-    
-    @staticmethod
-    def parse_conf_file(file, filepath='./etc'):
-        if os.path.isfile(file):
-            file = file
-        else:
-            file = os.path.join(filepath, file)
-        if not os.path.exists(file):
-            raise FileNotFoundError(f'cannot find or read configuration file {file}')
-
-        conf_file = configparser.ConfigParser()
-        conf_file.read(file)
-
-        # TODO: used for debugging, remove later
-        # for section in conf_file.sections():
-        #     for option in conf_file[section]:
-        #         if conf_file.get(section, option).endswith('.conf'):
-        #             nested_file = conf_file.get(section, option)
-        #             print(f'make sure to import {nested_file} related to {file}')
-
-        return conf_file
     
     def populate_configuration(self):
         # for key in vars(self.options):
@@ -242,7 +228,7 @@ class Carpalx:
         All non-letter characters are removed and remaining letters are switched to lower case.'''
 
         # prepend script's path before relative paths to the input text
-        file = self.resolve_path(file)
+        file = fileutils.resolve_path(Carpalx.configdir, file)
         if not os.path.exists(file):
             raise FileNotFoundError(f'cannot find input document {file}')
 
@@ -284,7 +270,7 @@ class Carpalx:
             if mode_cfg['force_case'] == 'lc':
                 line = line.lower()
             elif mode_cfg['force_case'] == 'uc':
-                line = line.lower()
+                line = line.upper()
 
             if self.kb_modes.has_option(mode, 'reject_char_rx'):
                 rx = re.compile(mode_cfg['reject_char_rx'])
@@ -302,7 +288,8 @@ class Carpalx:
                     continue
             self.print_debug(2, 'read_document', 'processed line', line)
 
-            charlist.extend(line)
+            if get_charlist:
+                charlist.extend(line)
 
             line_triads = [line[idx:idx+3] for idx, item in enumerate(line)]
             line_triads = [triad for triad in line_triads if len(triad) == 3]
@@ -331,18 +318,16 @@ class Carpalx:
                 return charlist
             elif len(charlist) >= self.config.getint('options', 'charlist_max_length'):
                 return charlist
-            else:
-                pass
 
-        self.print_debug(1, f'found {triads_count} triads ({len(keytriads)} unique)')
+        logging.info(f'found {triads_count} triads ({len(keytriads)} unique)')
+        
         # remove low-frequency triads
-        min_freq = 0
         if self.config.has_option('corpus', 'triads_min_freq'):
             min_freq = self.config.getint('corpus', 'triads_min_freq')
-        for triad, freq in keytriads.copy().items():
-            if freq < min_freq:
-                self.print_debug(1, f'removing rare triad {triad} freq {freq}')
-                del keytriads[triad]
+            for triad, freq in keytriads.copy().items():
+                if freq < min_freq:
+                    self.print_debug(1, f'removing rare triad {triad} freq {freq}')
+                    del keytriads[triad]
 
         # limit number of triads
         # TODO: triads_max_num might be in config.corpus or config.options
@@ -353,23 +338,19 @@ class Carpalx:
                 self.print_debug(1, f'removing triad {triad_to_del} freq {keytriads[triad_to_del]}')
                 del keytriads[triad_to_del]
 
-        self.print_debug(1, 'writing triads to cache', file_cache)
-        with open(file_cache, 'w') as cache_file:
-            cache_file.write(json.dumps(keytriads))
+        if not os.path.exists(file_cache):
+            logging.info(f'writing triads to cache {file_cache}')
+            with open(file_cache, 'w') as cache_file:
+                cache_file.write(json.dumps(keytriads))
 
-        # process the character list to create a frequency table of
-        # characters and character transitions
-        with open(file_cache_chars, 'w') as cache_chars:
-            cache_chars.write(json.dumps(charlist))
+        if not os.path.exists(file_cache_chars):
+            # process the character list to create a frequency table of
+            # characters and character transitions
+            logging.info(f'writing character list to cache {file_cache_chars}')
+            with open(file_cache_chars, 'w') as cache_chars:
+                cache_chars.write(json.dumps(charlist))
 
         return keytriads
-    
-    @staticmethod
-    def resolve_path(file):
-        if os.path.isabs(file):
-            return file
-        else:
-            return os.path.normpath(os.path.join(Carpalx.configdir, file))
     
     @staticmethod
     def print_debug(level, *messages):
@@ -386,7 +367,7 @@ class Carpalx:
             print('triad', triad, freq, freq/n, nc/n, 'effort', effort)
     
     def report_word_effort(self, keyboard):
-        word_file = self.resolve_path(self.config.get('wordstats', 'words'))
+        word_file = fileutils.resolve_path(Carpalx.configdir, self.config.get('wordstats', 'words'))
         if not os.path.exists(word_file):
             raise FileNotFoundError(f'cannot find word list file {word_file}')
         with open(word_file, 'r') as f:
@@ -432,8 +413,169 @@ class Carpalx:
         for word in top_easiest:
             print('wordreport group', groups+1, word[0], word[1])
 
+    def optimize_keyboard(self, keyboard, keytriads):
+        '''
+        Simulated annealing is used to search for a better keyboard layout.
+        
+        The function uses the list of triads, generated from the input text
+        document, and an initial keyboard layout.
+        '''
+        
+        annealing_options = self.config['annealing']
+        mask_config = fileutils.parse_conf_file(self.config.get('kb_parameters', 'mask'))
+        effort = keyboard.calculate_effort(keytriads)
+
+        if 'iterations' in annealing_options:
+            iterations = annealing_options.getint('iterations')
+        else:
+            iterations = 1000
+        t0 = annealing_options.getint('t0')
+        p0 = annealing_options.getint('p0')
+        k = annealing_options.getint('k')
+        # load up the mask - eligible keys for relocation
+        mask = keyboard._parse_mask(mask_config)
+        if not mask:
+            raise Exception('cannot create mask')
+        # create a list of all keys that can be relocated
+        reloc_list = keyboard.make_relocatable_list(mask)
+        
+        if 'maxswap' in annealing_options:
+            swap_range = (annealing_options.getint('minswaps'), annealing_options.getint('maxswaps'))
+        else:
+            swap_range = (annealing_options.getint('minswaps'), annealing_options.getint('minswaps'))
+        action = annealing_options.get('action')
+
+        update_count = 0
+        last_reported_effort = 0
+        original_keyboard = copy.deepcopy(keyboard)
+        seen_digests = []
+        effort = original_keyboard.calculate_effort(keytriads)
+        
+        for iteration in range(iterations):
+            timer_start = default_timer()
+            new_keyboard = {}
+            
+            if len(set(swap_range)) == 1:
+                swap_num = swap_range[0]
+            else:
+                swap_num = randint(swap_range[0], swap_range[1]+1)
+            if annealing_options.getboolean('onestep'):
+                new_keyboard = original_keyboard._swap_keys(reloc_list, swap_num)
+            else:
+                new_keyboard = keyboard._swap_keys(reloc_list, swap_num)
+            digest = new_keyboard.keyboard_digest()
+            if digest in seen_digests:
+                # already seen this layout - fetch next layout
+                logging.info(f'skipping iteration {iteration}')
+                continue
+            seen_digests.append(digest)
+            # this is breaking???
+            new_effort = new_keyboard.calculate_effort(keytriads)
+            deffort = new_effort - effort
+            report = {}
+            report['effort'] = effort
+            report['neweffort'] = new_effort
+            report['deffort'] = deffort
+            t = t0 * math.exp(-iteration*k/iterations)
+            p = p0 * math.exp(-abs(deffort)/t)
+            p = 1 if p > 1 else p # float round-off
+            report['t'] = t
+            report['p'] = p
+            keyboard_is_updated = 0
+            
+            if (action == 'minimize' and deffort < 0) \
+                or (action == 'maximize' and deffort > 0):
+                    # always accept layouts for which the effort is lower/higher (as prescribed by action)
+                    effort = new_effort
+                    keyboard = new_keyboard
+                    report['move'] = 'better/accept'
+                    keyboard_is_updated = 1
+            elif randint(0, 5) < p:
+                # sometimes accept layouts for which the effort is higher/lower (as prescribed by action)
+                report['move'] = 'worse/accept'
+                effort = new_effort
+                keyboard = new_keyboard
+                keyboard_is_updated = 1
+            else:
+                report['move'] = 'worse/reject'
+            update_count += keyboard_is_updated
+            
+            make_report = False
+            match Carpalx.report_filter:
+                case 'all':
+                    make_report = True
+                case 'update':
+                    make_report = True if report['move'].endswith('accept') else False
+                case 'lower':
+                    make_report = True if deffort < 0 else False
+                case 'higher':
+                    make_report = True if deffort > 0 else False
+                case 'lower_monotonic':
+                    make_report = True if not last_reported_effort or new_effort < last_reported_effort else False
+                case 'higher_monotonic':
+                    make_report = True if not last_reported_effort or new_effort > last_reported_effort else False
+            
+            make_draw = False
+            match Carpalx.draw_filter:
+                case 'all':
+                    make_draw = True
+                case 'update':
+                    make_draw = True if report['move'].endswith('accept') else False
+                case 'lower':
+                    make_draw = True if deffort < 0 else False
+                case 'higher':
+                    make_draw = True if deffort > 0 else False
+                case 'lower_monotonic':
+                    make_draw = True if not last_reported_effort or new_effort < last_reported_effort else False
+                case 'higher_monotonic':
+                    make_draw = True if not last_reported_effort or new_effort > last_reported_effort else False
+            
+            if make_report:
+                report['move'] += '/report'
+            if make_draw:
+                report['move'] += '/draw'
+            
+            stdout_report = False
+            match Carpalx.stdout_filter:
+                case 'all':
+                    stdout_report = True
+                case 'update':
+                    stdout_report = True if report['move'].endswith('accept') else False
+                case 'lower':
+                    stdout_report = True if deffort < 0 else False
+                case 'higher':
+                    stdout_report = True if deffort > 0 else False
+                case 'lower_monotonic':
+                    stdout_report = True if not last_reported_effort or new_effort < last_reported_effort else False
+                case 'higher_monotonic':
+                    stdout_report = True if not last_reported_effort or new_effort > last_reported_effort else False
+            
+            parameters = {'t': t,
+                          'iter': iteration,
+                          'update_count': update_count,
+                          'effort': effort,
+                          'new_effort': new_effort,
+                          'deffort': deffort}
+
+            timer_stop = default_timer()
+            time_elapsed = timer_stop - timer_start
+            
+            if stdout_report:
+                new_keyboard.print_keyboard()
+                print(f'iter {iteration} effort {effort:8.6f} -> {new_effort:8.6f} d {deffort:10.8f} p {p:10.8f} t {t:10.8f} {report["move"]} cpu {time_elapsed}')
+            
+            if make_report and not update_count % Carpalx.report_period == 0 :
+                self.report_keyboard(new_keyboard, Carpalx.keyboard_output, parameters)
+                last_reported_effort = new_effort
+            
+            if make_draw and not update_count % Carpalx.draw_period == 0:
+                self.draw_keyboard(new_keyboard.keyboard, Carpalx.pngfile_keyboard_output, parameters)
+                last_reported_effort = new_effort
+        
+        return keyboard
+    
     def report_keyboard(self, keyboard, file, parameters):
-        file = self.resolve_path(file)
+        file = fileutils.resolve_path(Carpalx.configdir, file)
         with open(file, 'a') as f:
             output_parameters = self.config.get('kb_definition', 'keyboard_output_show_parameters').split(',')
             if 'current' in output_parameters:
@@ -450,7 +592,7 @@ class Carpalx:
             f.write('<keyboard>\n')
             keys = []
             fingers = []
-            for row_idx, row in keyboard['key'].items():
+            for row_idx, row in keyboard.keyboard['key'].items():
                 f.write(f'<row {row_idx+1}>\n')
                 for col_idx, col in row.items():
                     lc, uc = col['lc'], col['uc']
@@ -474,7 +616,7 @@ class Carpalx:
         '''
         # TODO: review row positioning
 
-        file = self.resolve_path(file)
+        file = fileutils.resolve_path(Carpalx.configdir, file)
         
         imageparamset = self.config.getint('kb_parameters', 'imageparamset')
         image_params = self.config[f'imageparamsetdef {imageparamset}']
@@ -621,14 +763,13 @@ class Carpalx:
 class Keyboard:
     def __init__(self, kb_definition=None, effort_model=None):
         self.kb_definition_file = kb_definition
-        self.effort_model_file = effort_model 
-
+        self.effort_model_file = effort_model
         
-        self.effort_model = Carpalx.parse_conf_file(self.effort_model_file)
-        self.k_param = Carpalx.parse_conf_file(self.effort_model.get('main', 'k_param'))
-        self.weight_param = Carpalx.parse_conf_file(self.effort_model.get('main', 'weight_param'))
-        self.path_cost = Carpalx.parse_conf_file(self.effort_model.get('main', 'path_cost'))
-        self.finger_distance = Carpalx.parse_conf_file(self.effort_model.get('main', 'finger_distance'))
+        self.effort_model = fileutils.parse_conf_file(self.effort_model_file)
+        self.k_param = fileutils.parse_conf_file(self.effort_model.get('main', 'k_param'))
+        self.weight_param = fileutils.parse_conf_file(self.effort_model.get('main', 'weight_param'))
+        self.path_cost = fileutils.parse_conf_file(self.effort_model.get('main', 'path_cost'))
+        self.finger_distance = fileutils.parse_conf_file(self.effort_model.get('main', 'finger_distance'))
 
         self.keyboard = self.create_keyboard(self.kb_definition_file)
         self._effortlookup = {}
@@ -778,11 +919,11 @@ class Keyboard:
 
         '''
 
-        keyboard_file = Carpalx.resolve_path(keyboard_file)
+        keyboard_file = fileutils.resolve_path(Carpalx.configdir, keyboard_file)
         if not os.path.exists(keyboard_file):
             raise FileNotFoundError(f'cannot find keyboard definition file {keyboard_file}')
 
-        keyboard = Carpalx.parse_conf_file(keyboard_file)
+        keyboard = fileutils.parse_conf_file(keyboard_file)
         if not any([row for row in keyboard.sections() if row.startswith('row')]):
             raise KeyError(f'no keyboard row definitions in keyboard layout')
 
@@ -834,158 +975,162 @@ class Keyboard:
             print(lcrow, ' '*(30-len(lcrow)), ucrow)
         print('-'*60)
     
-    def optimize_keyboard(self, keytriads, annealing_options, mask_config):
-        '''
-        Simulated annealing is used to search for a better keyboard layout.
+    # def optimize_keyboard(self, keytriads, annealing_options, mask_config):
+    #     '''
+    #     Simulated annealing is used to search for a better keyboard layout.
         
-        The function uses the list of triads, generated from the input text
-        document, and an initial keyboard layout.
-        '''
+    #     The function uses the list of triads, generated from the input text
+    #     document, and an initial keyboard layout.
+    #     '''
         
-        # die "more arguments needed in optimize_keyboard" unless @_ == 2;
-        effort = self.calculate_effort(keytriads)
-        if 'iterations' in annealing_options:
-            iterations = annealing_options.getint('iterations')
-        else:
-            iterations = 1000
-        t0 = annealing_options.getint('t0')
-        k = annealing_options.getint('k')
-        # load up the mask - eligible keys for relocation
-        mask = self._parse_mask(mask_config)
-        if not mask:
-            raise Exception('cannot create mask')
-        # create a list of all keys that can be relocated
-        reloc_list = self.make_relocatable_list(mask)
-        update_count = 0
-        last_reported_effort = 0
-        original_keyboard = copy.deepcopy(self)
-        seen_digests = []
-        effort = original_keyboard.calculate_effort(keytriads)
-        for iteration in range(iterations):
-            timer_start = default_timer()
-            new_keyboard = {}
-            
-            if 'maxswap' in annealing_options:
-                swap_range = annealing_options.getint('maxswaps') - annealing_options.getint('minswaps')
-            else:
-                swap_range = None
-            swap_num = annealing_options.getint('minswaps')
-            
-            swap_num += randint(0, swap_range+1) if swap_range else 0
-            if annealing_options.getboolean('onestep'):
-                new_keyboard = original_keyboard._swap_keys(reloc_list, swap_num)
-            else:
-                new_keyboard = self._swap_keys(reloc_list, swap_num)
-            digest = new_keyboard.keyboard_digest()
-            if digest in seen_digests:
-                # already seen this layout - fetch next layout
-                continue
-            seen_digests.append(digest)
-            # this is breaking???
-            new_effort = new_keyboard.calculate_effort(keytriads)
-            deffort = new_effort - effort
-            report = {}
-            report['effort'] = effort
-            report['neweffort'] = new_effort
-            report['deffort'] = deffort
-            t = t0 * math.exp(-iteration*k/iterations)
-            p = annealing_options.getint('p0') * math.exp(-abs(deffort)/t)
-            p = 1 if p > 1 else p # float round-off
-            report['t'] = t
-            report['p'] = p
-            keyboard_is_updated = 0
-            
-            if (annealing_options.get('action') == 'minimize' and deffort < 0) \
-                or (annealing_options.get('action') == 'maximize' and deffort > 0):
-                    # always accept layouts for which the effort is lower/higher (as prescribed by action)
-                    effort = new_effort
-                    self = new_keyboard
-                    report['move'] = 'better/accept'
-                    keyboard_is_updated = 1
-            else:
-                if randint(0, 5) < p:
-                    # sometimes accept layouts for which the effort is higher/lower (as prescribed by action)
-                    report['move'] = 'worse/accept'
-                    effort = new_effort
-                    self = new_keyboard
-                    keyboard_is_updated = 1
-                else:
-                    report['move'] = 'worse/reject'
-            update_count += keyboard_is_updated
-            
-            make_report = False
-            match Carpalx.report_filter:
-                case 'all':
-                    make_report = True
-                case 'update':
-                    make_report = True if report['move'].endswith('accept') else False
-                case 'lower':
-                    make_report = True if deffort < 0 else False
-                case 'higher':
-                    make_report = True if deffort > 0 else False
-                case 'lower_monotonic':
-                    make_report = True if not last_reported_effort or new_effort < last_reported_effort else False
-                case 'higher_monotonic':
-                    make_report = True if not last_reported_effort or new_effort > last_reported_effort else False
-            
-            make_draw = False
-            match Carpalx.draw_filter:
-                case 'all':
-                    make_draw = True
-                case 'update':
-                    make_draw = True if report['move'].endswith('accept') else False
-                case 'lower':
-                    make_draw = True if deffort < 0 else False
-                case 'higher':
-                    make_draw = True if deffort > 0 else False
-                case 'lower_monotonic':
-                    make_draw = True if not last_reported_effort or new_effort < last_reported_effort else False
-                case 'higher_monotonic':
-                    make_draw = True if not last_reported_effort or new_effort > last_reported_effort else False
-            
-            if make_report:
-                report['move'] += '/report'
-            if make_draw:
-                report['move'] += '/draw'
-            
-            stdout_report = False
-            match Carpalx.stdout_filter:
-                case 'all':
-                    stdout_report = True
-                case 'update':
-                    stdout_report = True if report['move'].endswith('accept') else False
-                case 'lower':
-                    stdout_report = True if deffort < 0 else False
-                case 'higher':
-                    stdout_report = True if deffort > 0 else False
-                case 'lower_monotonic':
-                    stdout_report = True if not last_reported_effort or new_effort < last_reported_effort else False
-                case 'higher_monotonic':
-                    stdout_report = True if not last_reported_effort or new_effort > last_reported_effort else False
-            
-            parameters = {'t': t,
-                        'iter': iteration,
-                        'update_count': update_count,
-                        'effort': effort,
-                        'new_effort': new_effort,
-                        'deffort': deffort}
+    #     effort = self.calculate_effort(keytriads)
+    #     if 'iterations' in annealing_options:
+    #         iterations = annealing_options.getint('iterations')
+    #     else:
+    #         iterations = 1000
+    #     t0 = annealing_options.getint('t0')
+    #     p0 = annealing_options.getint('p0')
+    #     k = annealing_options.getint('k')
+    #     # load up the mask - eligible keys for relocation
+    #     mask = self._parse_mask(mask_config)
+    #     if not mask:
+    #         raise Exception('cannot create mask')
+    #     # create a list of all keys that can be relocated
+    #     reloc_list = self.make_relocatable_list(mask)
+        
+    #     if 'maxswap' in annealing_options:
+    #         swap_range = (annealing_options.getint('minswaps'), annealing_options.getint('maxswaps'))
+    #     else:
+    #         swap_range = (annealing_options.getint('minswaps'), annealing_options.getint('minswaps'))
+    #     action = annealing_options.get('action')
 
-            timer_stop = default_timer()
-            time_elapsed = timer_stop - timer_start
-            
-            if stdout_report:
-                new_keyboard.print_keyboard()
-                print(f'iter {iteration} effort {effort:8.6f} -> {new_effort:8.6f} d {deffort:10.8f} p {p:10.8f} t {t:10.8f} {report["move"]} cpu {time_elapsed}')
-            
-            if make_report and not update_count % Carpalx.report_period == 0 :
-                Carpalx.report_keyboard(self, Carpalx.keyboard_output, parameters)
-                last_reported_effort = new_effort
-            
-            if make_draw and not update_count % Carpalx.draw_period == 0:
-                Carpalx.draw_keyboard(self, Carpalx.pngfile_keyboard_output, parameters)
-                last_reported_effort = new_effort
+    #     update_count = 0
+    #     last_reported_effort = 0
+    #     original_keyboard = copy.deepcopy(self)
+    #     seen_digests = []
+    #     effort = original_keyboard.calculate_effort(keytriads)
         
-        return self
+    #     for iteration in range(iterations):
+    #         timer_start = default_timer()
+    #         new_keyboard = {}
+            
+    #         if len(set(swap_range)) == 1:
+    #             swap_num = swap_range[0]    
+    #         else:
+    #             swap_num = randint(swap_range[0], swap_range[1]+1)
+    #         if annealing_options.getboolean('onestep'):
+    #             new_keyboard = original_keyboard._swap_keys(reloc_list, swap_num)
+    #         else:
+    #             new_keyboard = self._swap_keys(reloc_list, swap_num)
+    #         digest = new_keyboard.keyboard_digest()
+    #         if digest in seen_digests:
+    #             # already seen this layout - fetch next layout
+    #             continue
+    #         seen_digests.append(digest)
+    #         # this is breaking???
+    #         new_effort = new_keyboard.calculate_effort(keytriads)
+    #         deffort = new_effort - effort
+    #         report = {}
+    #         report['effort'] = effort
+    #         report['neweffort'] = new_effort
+    #         report['deffort'] = deffort
+    #         t = t0 * math.exp(-iteration*k/iterations)
+    #         p = p0 * math.exp(-abs(deffort)/t)
+    #         p = 1 if p > 1 else p # float round-off
+    #         report['t'] = t
+    #         report['p'] = p
+    #         keyboard_is_updated = 0
+            
+    #         if (action == 'minimize' and deffort < 0) \
+    #             or (action == 'maximize' and deffort > 0):
+    #                 # always accept layouts for which the effort is lower/higher (as prescribed by action)
+    #                 effort = new_effort
+    #                 self = new_keyboard
+    #                 report['move'] = 'better/accept'
+    #                 keyboard_is_updated = 1
+    #         elif randint(0, 5) < p:
+    #             # sometimes accept layouts for which the effort is higher/lower (as prescribed by action)
+    #             report['move'] = 'worse/accept'
+    #             effort = new_effort
+    #             self = new_keyboard
+    #             keyboard_is_updated = 1
+    #         else:
+    #             report['move'] = 'worse/reject'
+    #         update_count += keyboard_is_updated
+            
+    #         make_report = False
+    #         match Carpalx.report_filter:
+    #             case 'all':
+    #                 make_report = True
+    #             case 'update':
+    #                 make_report = True if report['move'].endswith('accept') else False
+    #             case 'lower':
+    #                 make_report = True if deffort < 0 else False
+    #             case 'higher':
+    #                 make_report = True if deffort > 0 else False
+    #             case 'lower_monotonic':
+    #                 make_report = True if not last_reported_effort or new_effort < last_reported_effort else False
+    #             case 'higher_monotonic':
+    #                 make_report = True if not last_reported_effort or new_effort > last_reported_effort else False
+            
+    #         make_draw = False
+    #         match Carpalx.draw_filter:
+    #             case 'all':
+    #                 make_draw = True
+    #             case 'update':
+    #                 make_draw = True if report['move'].endswith('accept') else False
+    #             case 'lower':
+    #                 make_draw = True if deffort < 0 else False
+    #             case 'higher':
+    #                 make_draw = True if deffort > 0 else False
+    #             case 'lower_monotonic':
+    #                 make_draw = True if not last_reported_effort or new_effort < last_reported_effort else False
+    #             case 'higher_monotonic':
+    #                 make_draw = True if not last_reported_effort or new_effort > last_reported_effort else False
+            
+    #         if make_report:
+    #             report['move'] += '/report'
+    #         if make_draw:
+    #             report['move'] += '/draw'
+            
+    #         stdout_report = False
+    #         match Carpalx.stdout_filter:
+    #             case 'all':
+    #                 stdout_report = True
+    #             case 'update':
+    #                 stdout_report = True if report['move'].endswith('accept') else False
+    #             case 'lower':
+    #                 stdout_report = True if deffort < 0 else False
+    #             case 'higher':
+    #                 stdout_report = True if deffort > 0 else False
+    #             case 'lower_monotonic':
+    #                 stdout_report = True if not last_reported_effort or new_effort < last_reported_effort else False
+    #             case 'higher_monotonic':
+    #                 stdout_report = True if not last_reported_effort or new_effort > last_reported_effort else False
+            
+    #         parameters = {'t': t,
+    #                       'iter': iteration,
+    #                       'update_count': update_count,
+    #                       'effort': effort,
+    #                       'new_effort': new_effort,
+    #                       'deffort': deffort}
+
+    #         timer_stop = default_timer()
+    #         time_elapsed = timer_stop - timer_start
+            
+    #         if stdout_report:
+    #             new_keyboard.print_keyboard()
+    #             print(f'iter {iteration} effort {effort:8.6f} -> {new_effort:8.6f} d {deffort:10.8f} p {p:10.8f} t {t:10.8f} {report["move"]} cpu {time_elapsed}')
+            
+    #         if make_report and not update_count % Carpalx.report_period == 0 :
+    #             Carpalx.report_keyboard(Carpalx.self, self, Carpalx.keyboard_output, parameters)
+    #             last_reported_effort = new_effort
+            
+    #         if make_draw and not update_count % Carpalx.draw_period == 0:
+    #             Carpalx.draw_keyboard(self, Carpalx.pngfile_keyboard_output, parameters)
+    #             last_reported_effort = new_effort
+        
+    #     return self
     
     def keyboard_digest(self):
         keys = []
@@ -1015,7 +1160,7 @@ class Keyboard:
         keyboard_copy = copy.deepcopy(self)
         if not n:
             n = 1
-        for i in range(n):
+        for _ in range(n):
             # pick two random keyboard locations from the list of relocatable keys
             key1, key2 = 0, 0
             while key1 == key2:
@@ -1148,7 +1293,9 @@ class Keyboard:
         i1, i2, i3 = (leaf[c1]['idx'], leaf[c2]['idx'], leaf[c3]['idx'])
 
         if memorize \
-            and i1 in self._effortlookup and i2 in self._effortlookup[i1] and i3 in self._effortlookup[i1][i2]:
+            and i1 in self._effortlookup \
+            and i2 in self._effortlookup[i1] \
+            and i3 in self._effortlookup[i1][i2]:
                 return self._effortlookup[i1][i2][i3]
 
         # keyboard effort of each character
@@ -1167,6 +1314,7 @@ class Keyboard:
         if ks:
             # hand, finger, row flags for stroke path
             # see http://mkweb.bcgsc.ca/carpalx/?typing_effort
+
             if h1 == h3 and h2 == h3: # same hand
                 hand_flag = 2
             elif h1 == h3: # alternating hands
@@ -1188,7 +1336,6 @@ class Keyboard:
                     finger_flag = 2
                 else: # not monotonic all different - pf=3
                     finger_flag = 3
-
             elif f1 < f2:
                 if f2 < f3: # 1 < 2 < 3 - monotonic all different - pf=0
                     finger_flag = 0
@@ -1239,7 +1386,7 @@ class Keyboard:
                 elif row2 > row3: # 1 > 2 > 3 - upward
                     row_flag = 6
                 elif drmax_abs == 1:
-                    row_flag = 3;
+                    row_flag = 3
                 else:
                     if drmax < 0:
                         row_flag = 7
@@ -1289,6 +1436,7 @@ class Keyboard:
         return triad_effort
 
     def report_keyboard_effort(self, keytriads, option, charlist, memorize=True):
+        start_time = default_timer()
         effort = {}
         effort['all'] = self.calculate_effort(keytriads, memorize)
 
@@ -1443,61 +1591,50 @@ class Keyboard:
         Carpalx.histogram(stats['hand'], 'keyboard hand frequency', 'hand')
         Carpalx.histogram(stats['finger'], 'keyboard finger frequency', 'finger')
 
-        runlength = {}
-
         Carpalx.print_debug(1, "calculating runs")
         stats['charfreq'] = defaultdict(int)
         stats['charpairfreq'] = defaultdict(int)
         stats['run'] = defaultdict(dict)
         stats['run']['rowjump'] = defaultdict(int)
-        for idx, char in enumerate(charlist):    
-            if char not in self.keyboard['map']:
-                charlist.remove(char)
-                continue
-            stats['charfreq'][char] += 1
-            if idx == 0:
-                runlength['rowjump'] = 1
-                runlength['finger'] = 1
-                runlength['hand'] = 1
-                runlength['row'] = 1
+        
+        charlist = [char for char in charlist if char in self.keyboard['map']]
+        charpairs = ['.'.join(items) for items in list(zip(charlist, charlist[1:]))]
+        stats['charfreq'] = Counter(charlist)
+        stats['charpairfreq'] = Counter(charpairs)
+
+        runlength = {}
+        runlength['rowjump'] = 1
+        runlength['finger'] = 1
+        runlength['hand'] = 1
+        runlength['row'] = 1
+
+        for pair in charpairs:
+            c1, c2 = pair.split('.')
+            h1 = self.keyboard['map'][c1]['hand']
+            h2 = self.keyboard['map'][c2]['hand']
+            r1 = self.keyboard['map'][c1]['row']
+            r2 = self.keyboard['map'][c2]['row']
+            if h1 == h2 and r1 != r2:
+                runlength['rowjump'] = runlength.get('rowjump', 0) + abs(r1-r2)
             else:
-                stats['charpairfreq'][f'{charlist[idx-1]}.{char}'] += 1
-                try:
-                    h1 = self.keyboard['map'][char]['hand']
-                    h2 = self.keyboard['map'][charlist[idx-1]]['hand']
-                    r1 = self.keyboard['map'][char]['row']
-                    r2 = self.keyboard['map'][charlist[idx-1]]['row']
-                except Exception as e:
-                    print(idx, char)
-                    print()
-                    raise e
-                if h1 == h2 and r1 != r2:
-                    runlength['rowjump'] = runlength.get('rowjump', 0) + abs(r1-r2)
+                stats['run']['rowjump'][runlength['rowjump']] += 1
+                runlength['rowjump'] = stats['charpairfreq'][pair]
+            
+            for runtype in ['finger', 'hand', 'row']:
+                cv = self.keyboard['map'][c2][runtype]
+                cvp = self.keyboard['map'][c1][runtype]
+                if cv == cvp:
+                    runlength[runtype] += 1
                 else:
-                    stats['run']['rowjump'][runlength['rowjump']] += 1
-                    runlength['rowjump'] = 1
-                if idx == len(charlist) - 1:
-                    stats['run']['rowjump'][runlength['rowjump']] = stats['run']['rowjump'].get(runlength['rowjump'], 0) + 1
-                for runtype in ['finger', 'hand', 'row']:
-                    cv = self.keyboard['map'][char][runtype]
-                    cvp = self.keyboard['map'][charlist[idx-1]][runtype]
-                    if cv == cvp:
-                        runlength[runtype] += 1
-                    else:
-                        # TODO: review if this won't be overwritten
-                        if 'all' not in stats['run'][runtype]:
-                            stats['run'][runtype]['all'] = defaultdict(dict)
-                        stats['run'][runtype]['all'][runlength[runtype]] = stats['run'][runtype]['all'].get(runlength[runtype], 0) + 1
-                        if runtype != 'finger':
-                            if cvp not in stats['run'][runtype]:
-                                stats['run'][runtype][cvp] = defaultdict(dict)
-                            stats['run'][runtype][cvp][runlength[runtype]] = stats['run'][runtype][cvp].get(runlength[runtype], 0) + 1
-                        runlength[runtype] = 1
-                    if idx == len(charlist) - 1:
-                        # TODO: review if this won't be overwritten
-                        stats['run'][runtype]['all'][runlength[runtype]] = stats['run'][runtype]['all'].get(runlength[runtype], 0) + 1
-                        if runtype != 'finger':
-                            stats['run'][runtype][cvp][runlength[runtype]] = stats['run'][runtype][cvp].get(runlength[runtype], 0) + 1
+                    # TODO: review if this won't be overwritten
+                    if 'all' not in stats['run'][runtype]:
+                        stats['run'][runtype]['all'] = defaultdict(dict)
+                    stats['run'][runtype]['all'][runlength[runtype]] = stats['run'][runtype]['all'].get(runlength[runtype], 0) + stats['charpairfreq'][pair]
+                    if runtype != 'finger':
+                        if cvp not in stats['run'][runtype]:
+                            stats['run'][runtype][cvp] = defaultdict(dict)
+                        stats['run'][runtype][cvp][runlength[runtype]] = stats['run'][runtype][cvp].get(runlength[runtype], 0) + stats['charpairfreq'][pair]
+                    runlength[runtype] = 1
         
         Carpalx.histogram(stats['run']['hand'][0], 'keyboard left hand run length', 'left_hand_run')
         Carpalx.histogram(stats['run']['hand'][1], 'keyboard right hand run length', 'right_hand_run')
@@ -1510,6 +1647,233 @@ class Keyboard:
         Carpalx.histogram(stats['run']['rowjump'], 'keyboard same-hand row jump length', 'row_jump')
         Carpalx.histogram(stats['charfreq'], 'corpus character frequency', 'character_frequency', 'values')
         Carpalx.histogram(stats['charpairfreq'], 'corpus character pair frequency', 'character_pair_frequency', 'values')
+
+        end_time = default_timer()
+        elapsed_time = end_time - start_time
+        print(f'Keyboard effort report generated in {elapsed_time:.2f} seconds')
+    
+        # def report_keyboard_effort(self, keytriads, option, charlist, memorize=True):
+        # effort = {}
+        # effort['all'] = self.calculate_effort(keytriads, memorize)
+
+        # # recall: triad effort is
+        # #
+        # # kb * k1*be1 * ( 1 + k2*be2 * ( 1 + k3*be3 ) ) +
+        # # kp * k1*pe1 * ( 1 + k2*pe2 * ( 1 + k3*pe3 ) ) +
+        # # ks * s
+        # #
+        # # be1,be2,be3 baseline efforts for first, second and third key in triad
+        # # pe1,pe2,pe3 penalty efforts for first, second and third key in triad
+        # # s stroke path
+
+        # local_k = copy.deepcopy(self.k_param)
+        # # baseline effort
+        # # kp=ks=0
+        # local_k['effort']['kp'] = '0'
+        # local_k['effort']['ks'] = '0'
+
+        # keyboard_new = Keyboard(self.kb_definition_file, self.effort_model_file)
+        # effort['base'] = keyboard_new.calculate_effort(keytriads, local_k)
+
+        # local_k = copy.deepcopy(self.k_param)
+        # # penalty effort
+        # # kb=ks=0
+        # local_k['effort']['kb'] = '0'
+        # local_k['effort']['ks'] = '0'
+        # keyboard_new = Keyboard(self.kb_definition_file, self.effort_model_file)
+        # effort['penalty'] = keyboard_new.calculate_effort(keytriads, local_k)
+
+        # local_k = copy.deepcopy(self.k_param)
+        # # stroke effort
+        # # kb=kp=0
+        # local_k['effort']['kb'] = '0'
+        # local_k['effort']['kp'] = '0'
+        # keyboard_new = Keyboard(self.kb_definition_file, self.effort_model_file)
+        # effort['path'] = keyboard_new.calculate_effort(keytriads, local_k)
+
+        # local_k = copy.deepcopy(self.k_param)
+        # local_weight = copy.deepcopy(self.weight_param)
+        # # hand penalty only
+        # local_k['effort']['kb'] = '0'
+        # local_k['effort']['ks'] = '0'
+        # local_weight['main']['default'] = '0'
+        # local_weight['weight']['row'] = '0'
+        # local_weight['weight']['finger'] = '0'
+        # keyboard_new = Keyboard(self.kb_definition_file, self.effort_model_file)
+        # effort['penalty_hand'] = keyboard_new.calculate_effort(keytriads, local_k, local_weight)
+
+        # local_k = copy.deepcopy(self.k_param)
+        # local_weight = copy.deepcopy(self.weight_param)
+        # # row penalty only
+        # local_k['effort']['kb'] = '0'
+        # local_k['effort']['ks'] = '0'
+        # local_weight['main']['default'] = '0'
+        # local_weight['weight']['hand'] = '0'
+        # local_weight['weight']['finger'] = '0'
+        # keyboard_new = Keyboard(self.kb_definition_file, self.effort_model_file)
+        # effort['penalty_row'] = keyboard_new.calculate_effort(keytriads, local_k, local_weight)
+
+        # local_k = copy.deepcopy(self.k_param)
+        # local_weight = copy.deepcopy(self.weight_param)
+        # # finger penalty only
+        # local_k['effort']['kb'] = '0'
+        # local_k['effort']['ks'] = '0'
+        # local_weight['main']['default'] = '0'
+        # local_weight['weight']['hand'] = '0'
+        # local_weight['weight']['row'] = '0'
+        # keyboard_new = Keyboard(self.kb_definition_file, self.effort_model_file)
+        # effort['penalty_finger'] = keyboard_new.calculate_effort(keytriads, local_k, local_weight)
+
+        # local_k = copy.deepcopy(self.k_param)
+        # local_weight = copy.deepcopy(self.weight_param)
+        # # one-key effort
+        # local_k['effort']['k2'] = '0'
+        # local_k['effort']['k3'] = '0'
+        # local_k['effort']['ks'] = '0'
+        # keyboard_new = Keyboard(self.kb_definition_file, self.effort_model_file)
+        # effort['k1'] = keyboard_new.calculate_effort(keytriads, local_k)
+
+        # local_k = copy.deepcopy(self.k_param)
+        # # two-key effort
+        # local_k['effort']['k3'] = '0'
+        # local_k['effort']['ks'] = '0'
+        # keyboard_new = Keyboard(self.kb_definition_file, self.effort_model_file)
+        # effort['k12'] = keyboard_new.calculate_effort(keytriads, local_k)
+
+        # local_k = copy.deepcopy(self.k_param)
+        # # three-key effort
+        # local_k['effort']['ks'] = '0'
+        # keyboard_new = Keyboard(self.kb_definition_file, self.effort_model_file)
+        # effort['k123'] = keyboard_new.calculate_effort(keytriads, local_k)
+
+        # efforts = {'k1': [effort['k1'],
+        #                 100*sdiv(effort['k1'],effort['k123']),
+        #                 100*sdiv(effort['k1'],effort['k123'])],
+        #         'k12': [effort['k12'],
+        #                 100*sdiv(effort['k12']-effort['k1'],effort['k123']),
+        #                 100*sdiv(effort['k12'],effort['k123'])],
+        #         'k123': [effort['k123'],
+        #                     100*sdiv(effort['k123']-effort['k12'],effort['k123']),
+        #                     100*sdiv(effort['k123'],effort['k123'])],
+        #         'base': [effort['base'],
+        #                     100*sdiv(effort['base'],effort['all']),
+        #                     100*sdiv(effort['base'],effort['all'])],
+        #         'penalty': [effort['penalty'],
+        #                     100*sdiv(effort['penalty'],effort['all']),
+        #                     100*sdiv(effort['base']+effort['penalty'],effort['penalty'])],
+        #         'penalty_hand': [effort['penalty_hand'],
+        #                             100*sdiv(effort['penalty_hand'],effort['penalty']),
+        #                             100*sdiv(effort['penalty_hand'],effort['penalty'])],
+        #         'penalty_row': [effort['penalty_row'],
+        #                         100*sdiv(effort['penalty_row'],effort['penalty']),
+        #                         100*sdiv(effort['penalty_hand']+effort['penalty_row'],effort['penalty'])],
+        #         'penalty_finger': [effort['penalty_finger'],
+        #                             100*sdiv(effort['penalty_finger'],effort['penalty']),
+        #                             100*sdiv(effort['penalty_hand']+effort['penalty_row']+effort['penalty_finger'],effort['penalty'])],
+        #         'path': [effort['path'],
+        #                     100*sdiv(effort['path'],effort['all']),
+        #                     100*sdiv(effort['base']+effort['penalty']+effort['path'],effort['all'])],
+        #         'all': [effort['all'],
+        #                 100*sdiv(effort['all'],effort['all']),
+        #                 100*sdiv(effort['all'],effort['all'])]}
+
+        # print("Keyboard effort")
+        # print("-" * 60)
+
+        # kb_effort = pd.DataFrame(efforts).transpose().round(decimals=3)
+        # kb_effort.rename(columns={0: 'Absolute', 1: 'Relative', 2: 'Cumulative'}, inplace=True)
+        # print(kb_effort)
+        
+        # if option == 'verybrief':
+        #     return
+
+        # print('\n')
+
+        # stats = {}
+        # stats['row'] = defaultdict(int)
+        # stats['hand'] = defaultdict(int)
+        # stats['finger'] = defaultdict(int)
+        # for triad in keytriads:
+        #     ntriad = keytriads[triad]
+        #     char   = triad[0]
+        #     row    = self.keyboard['map'][char]['row']
+        #     hand   = self.keyboard['map'][char]['hand']
+        #     finger = self.keyboard['map'][char]['finger']
+        #     stats['row'][row] += ntriad
+        #     stats['hand'][hand] += ntriad
+        #     stats['finger'][finger] += ntriad
+
+        # Carpalx.histogram(stats['row'], 'keyboard row frequency', 'row')
+        # Carpalx.histogram(stats['hand'], 'keyboard hand frequency', 'hand')
+        # Carpalx.histogram(stats['finger'], 'keyboard finger frequency', 'finger')
+
+        # runlength = {}
+
+        # Carpalx.print_debug(1, "calculating runs")
+        # stats['charfreq'] = defaultdict(int)
+        # stats['charpairfreq'] = defaultdict(int)
+        # stats['run'] = defaultdict(dict)
+        # stats['run']['rowjump'] = defaultdict(int)
+        # for idx, char in enumerate(charlist):    
+        #     if char not in self.keyboard['map']:
+        #         charlist.remove(char)
+        #         continue
+        #     stats['charfreq'][char] += 1
+        #     if idx == 0:
+        #         runlength['rowjump'] = 1
+        #         runlength['finger'] = 1
+        #         runlength['hand'] = 1
+        #         runlength['row'] = 1
+        #     else:
+        #         stats['charpairfreq'][f'{charlist[idx-1]}.{char}'] += 1
+        #         try:
+        #             h1 = self.keyboard['map'][char]['hand']
+        #             h2 = self.keyboard['map'][charlist[idx-1]]['hand']
+        #             r1 = self.keyboard['map'][char]['row']
+        #             r2 = self.keyboard['map'][charlist[idx-1]]['row']
+        #         except Exception as e:
+        #             print(idx, char)
+        #             print()
+        #             raise e
+        #         if h1 == h2 and r1 != r2:
+        #             runlength['rowjump'] = runlength.get('rowjump', 0) + abs(r1-r2)
+        #         else:
+        #             stats['run']['rowjump'][runlength['rowjump']] += 1
+        #             runlength['rowjump'] = 1
+        #         if idx == len(charlist) - 1:
+        #             stats['run']['rowjump'][runlength['rowjump']] = stats['run']['rowjump'].get(runlength['rowjump'], 0) + 1
+        #         for runtype in ['finger', 'hand', 'row']:
+        #             cv = self.keyboard['map'][char][runtype]
+        #             cvp = self.keyboard['map'][charlist[idx-1]][runtype]
+        #             if cv == cvp:
+        #                 runlength[runtype] += 1
+        #             else:
+        #                 # TODO: review if this won't be overwritten
+        #                 if 'all' not in stats['run'][runtype]:
+        #                     stats['run'][runtype]['all'] = defaultdict(dict)
+        #                 stats['run'][runtype]['all'][runlength[runtype]] = stats['run'][runtype]['all'].get(runlength[runtype], 0) + 1
+        #                 if runtype != 'finger':
+        #                     if cvp not in stats['run'][runtype]:
+        #                         stats['run'][runtype][cvp] = defaultdict(dict)
+        #                     stats['run'][runtype][cvp][runlength[runtype]] = stats['run'][runtype][cvp].get(runlength[runtype], 0) + 1
+        #                 runlength[runtype] = 1
+        #             if idx == len(charlist) - 1:
+        #                 # TODO: review if this won't be overwritten
+        #                 stats['run'][runtype]['all'][runlength[runtype]] = stats['run'][runtype]['all'].get(runlength[runtype], 0) + 1
+        #                 if runtype != 'finger':
+        #                     stats['run'][runtype][cvp][runlength[runtype]] = stats['run'][runtype][cvp].get(runlength[runtype], 0) + 1
+        
+        # Carpalx.histogram(stats['run']['hand'][0], 'keyboard left hand run length', 'left_hand_run')
+        # Carpalx.histogram(stats['run']['hand'][1], 'keyboard right hand run length', 'right_hand_run')
+        # Carpalx.histogram(stats['run']['hand']['all'], 'keyboard hand run length', 'all_hand_run')
+        # Carpalx.histogram(stats['run']['row'][1], 'keyboard top row run length', 't_row_run')
+        # Carpalx.histogram(stats['run']['row'][2], 'keyboard home row run length', 'h_row_run')
+        # Carpalx.histogram(stats['run']['row'][3], 'keyboard bottom row run length', 'b_row_run')
+        # Carpalx.histogram(stats['run']['row']['all'], 'keyboard row run length', 'all_row_run')
+        # Carpalx.histogram(stats['run']['finger']['all'], 'keyboard finger run length', 'finger_run')
+        # Carpalx.histogram(stats['run']['rowjump'], 'keyboard same-hand row jump length', 'row_jump')
+        # Carpalx.histogram(stats['charfreq'], 'corpus character frequency', 'character_frequency', 'values')
+        # Carpalx.histogram(stats['charpairfreq'], 'corpus character pair frequency', 'character_pair_frequency', 'values')
     
     def rank_words(self, words):
         '''
@@ -1916,6 +2280,7 @@ def sdiv(a, b):
 # %% execution
 
 if __name__ == '__main__':
-    os.chdir(r'D:\Cleison\Documents\GitHub\carpalx-py')
+    os.chdir(r'C:\\Users\\cleisonp\\OneDrive - Alcast do Brasil SA\\Documentos\\GitHub\\carpalx-py')
+    # logger = log.get_logger(__name__, level=log.logging.INFO)
     run = Carpalx('etc//tutorial-00 copy.ini')
 # %%
